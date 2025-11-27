@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employee Portal</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f7fa; padding-bottom: 60px; }
+        .login-page { display: flex; justify-content: center; align-items: center; min-height: 100vh; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .login-card { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); width: 100%; max-width: 400px; }
+        .dashboard { display: none; }
+        .dashboard.active { display: block; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .card { background: white; margin: 15px; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .check-btn { width: 100%; padding: 15px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; margin-top: 15px; font-weight: bold; }
+        .check-btn.check-in { background: #28a745; color: white; }
+        .check-btn.check-out { background: #dc3545; color: white; }
+        .check-btn:disabled { background: #ccc; cursor: not-allowed; }
+        #employeeMap { height: 350px; width: 100%; border-radius: 8px; }
+        .nav-bar { position: fixed; bottom: 0; left: 0; right: 0; background: white; display: flex; justify-content: space-around; padding: 10px 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 1000; }
+        .nav-item { flex: 1; text-align: center; padding: 10px; cursor: pointer; font-weight: bold; }
+        .nav-item.active { color: #667eea; }
+        .camera-modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.95); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; }
+        .camera-modal.active { display: flex; }
+        #cameraFeed { width: 100%; max-width: 500px; border-radius: 15px; }
+        .view { display: none; }
+        .view.active { display: block; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #e1e8ed; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        .status-badge { padding: 5px 10px; border-radius: 15px; font-weight: bold; display: inline-block; margin-bottom: 15px; }
+        .status-badge.checked-in { background: #d4edda; color: #155724; }
+        .status-badge.checked-out { background: #f8d7da; color: #721c24; }
+        .location-info { background: #e7f3ff; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 13px; }
+    </style>
+</head>
+<body>
+
+    <!-- LOGIN -->
+    <div id="loginPage" class="login-page">
+        <div class="login-card">
+            <h1>📍 Employee Portal</h1>
+            <input type="text" id="username" placeholder="Username">
+            <input type="password" id="password" placeholder="Password">
+            <button class="check-btn check-in" onclick="login()">Sign In</button>
+        </div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div id="dashboard" class="dashboard">
+        <div class="header">
+            <h2 id="empName">My Dashboard</h2>
+            <button onclick="logout()" style="background: rgba(255,255,255,0.2); border: none; color: white; padding: 8px 15px; border-radius: 5px;">Logout</button>
+        </div>
+        
+        <div id="homeView" class="view active">
+            <div class="card">
+                <div id="statusBadge" class="status-badge checked-out">Checked Out</div>
+                <div id="locationInfo" class="location-info" style="display: none;">
+                    <strong>📍 Current Location:</strong> <span id="currentCoords"></span><br>
+                    <strong>📡 Status:</strong> <span id="locationStatus"></span>
+                </div>
+                <button id="checkBtn" class="check-btn check-in" onclick="toggleCheckInOut()">📸 Check In</button>
+            </div>
+            <div class="card">
+                <h3>All Check-in Zones & My Location</h3>
+                <p style="color: #666; font-size: 13px;">📍 Green circles = All zones | 🔴 "You" = Your live position</p>
+                <div id="employeeMap"></div>
+            </div>
+        </div>
+
+        <div id="historyView" class="view">
+            <div class="card">
+                <h3>My Attendance History</h3>
+                <div id="historyList"></div>
+            </div>
+        </div>
+
+        <div class="nav-bar">
+            <div class="nav-item active" onclick="showView('home')">Home</div>
+            <div class="nav-item" onclick="showView('history')">History</div>
+        </div>
+    </div>
+
+    <!-- CAMERA MODAL -->
+    <div id="cameraModal" class="camera-modal">
+        <video id="cameraFeed" autoplay></video>
+        <canvas id="canvas" style="display: none;"></canvas>
+        <div style="margin-top: 20px;">
+            <button onclick="capturePhoto()" style="padding: 15px 30px; background: #28a745; color: white; border: none; border-radius: 10px;">📸 Capture & Check In</button>
+            <button onclick="closeCameraModal()" style="padding: 15px 30px; background: #dc3545; color: white; border: none; border-radius: 10px; margin-left: 10px;">Cancel</button>
+        </div>
+    </div>
+
+    <script>
+        // ==================== CONFIGURATION ====================
+        // ⚠️⚠️⚠️ REPLACE WITH YOUR ACTUAL GOOGLE SHEETS API URL ⚠️⚠️⚠️
+        const API_URL = 'https://script.google.com/macros/s/AKfycbxkIs_4mM1b4BgZibbtBiHaxfGZrzHvXvqBaL1sqbl1f3bqEcr0IDhtmdzkmv_CUUJB/exec';
+        
+        // ==================== GLOBAL VARIABLES ====================
+        let currentEmployee = null;
+        let employeeMap = null;
+        let locations = [];
+        let currentLocation = null;
+        let isCheckedIn = false;
+        let capturedPhoto = null;
+        let videoStream = null;
+        let employeeMarker = null;
+        let locationMarkers = []; // Track location markers
+
+        // ==================== API CALL ====================
+        async function apiCall(action, data = {}) {
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({ action, data })
+                });
+                const result = await response.json();
+                
+                // Debug log
+                if (action === 'get_locations' && result.success) {
+                    console.log(`📍 Loaded ${result.data.length} locations`);
+                }
+                
+                return result;
+            } catch (error) {
+                console.error('❌ API Error:', error);
+                return { success: false, error: error.message };
+            }
+        }
+
+        // ==================== AUTHENTICATION ====================
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            const result = await apiCall('employee_login', { username, password });
+            
+            if (result.success && result.data) {
+                currentEmployee = result.data;
+                document.getElementById('loginPage').style.display = 'none';
+                document.getElementById('dashboard').classList.add('active');
+                document.getElementById('empName').textContent = 'Welcome, ' + currentEmployee.name;
+                
+                await initApp();
+            } else {
+                alert('❌ Invalid credentials. Contact admin.');
+            }
+        }
+
+        // ==================== INITIALIZATION ====================
+        async function initApp() {
+            console.log('🚀 Initializing employee app...');
+            
+            // Load locations FIRST
+            const locationsResult = await apiCall('get_locations');
+            if (locationsResult.success) {
+                locations = locationsResult.data;
+                console.log(`✅ Loaded ${locations.length} check-in zones`);
+            } else {
+                alert('⚠️ Could not load locations');
+            }
+            
+            // Check current status
+            const logsResult = await apiCall('get_logs');
+            if (logsResult.success) {
+                const myLogs = logsResult.data.filter(log => log.employee_id == currentEmployee.id);
+                const latestLog = myLogs[0];
+                if (latestLog?.action === 'check-in') {
+                    isCheckedIn = true;
+                    document.getElementById('statusBadge').textContent = 'Checked In';
+                    document.getElementById('statusBadge').className = 'status-badge checked-in';
+                    document.getElementById('checkBtn').textContent = 'Check Out';
+                }
+            }
+            
+            // Start GPS tracking
+            requestLocation();
+            setInterval(sendLocationUpdate, 5000);
+        }
+
+        // ==================== CHECK IN/OUT ====================
+        async function toggleCheckInOut() {
+            if (!currentLocation) {
+                alert('Waiting for GPS location... Please wait.');
+                return;
+            }
+            
+            // Check if in ANY check-in zone
+            const inZone = locations.some(loc => {
+                const distance = calculateDistance(
+                    currentLocation.lat, currentLocation.lng,
+                    parseFloat(loc.lat), parseFloat(loc.lng)
+                );
+                return distance <= loc.radius;
+            });
+
+            if (!inZone && !isCheckedIn) {
+                alert('❌ You must be inside a check-in zone to check in');
+                return;
+            }
+            
+            isCheckedIn ? await performCheckOut() : openCameraModal();
+        }
+
+        async function performCheckOut() {
+            isCheckedIn = false;
+            
+            await apiCall('add_log', {
+                employee_id: currentEmployee.id,
+                employee_name: currentEmployee.name,
+                action: 'check-out',
+                lat: currentLocation.lat,
+                lng: currentLocation.lng,
+                timestamp: new Date().toISOString()
+            });
+            
+            await apiCall('update_employee', {
+                id: currentEmployee.id,
+                status: 'checked-out'
+            });
+            
+            document.getElementById('statusBadge').textContent = 'Checked Out';
+            document.getElementById('statusBadge').className = 'status-badge checked-out';
+            document.getElementById('checkBtn').textContent = '📸 Check In';
+        }
+
+        function openCameraModal() {
+            document.getElementById('cameraModal').classList.add('active');
+            navigator.mediaDevices.getUserMedia({ video: true })
+                .then(stream => {
+                    videoStream = stream;
+                    document.getElementById('cameraFeed').srcObject = stream;
+                })
+                .catch(() => alert('❌ Camera access denied. Please allow camera to check in.'));
+        }
+
+        async function capturePhoto() {
+            const video = document.getElementById('cameraFeed');
+            const canvas = document.getElementById('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0);
+            capturedPhoto = canvas.toDataURL('image/jpeg');
+            videoStream.getTracks().forEach(t => t.stop());
+            
+            await performCheckIn();
+            document.getElementById('cameraModal').classList.remove('active');
+        }
+
+        async function performCheckIn() {
+            isCheckedIn = true;
+            
+            await apiCall('add_log', {
+                employee_id: currentEmployee.id,
+                employee_name: currentEmployee.name,
+                action: 'check-in',
+                lat: currentLocation.lat,
+                lng: currentLocation.lng,
+                photo_url: capturedPhoto,
+                timestamp: new Date().toISOString()
+            });
+            
+            await apiCall('update_employee', {
+                id: currentEmployee.id,
+                status: 'checked-in',
+                lat: currentLocation.lat,
+                lng: currentLocation.lng,
+                last_update: new Date().toISOString()
+            });
+            
+            document.getElementById('statusBadge').textContent = 'Checked In';
+            document.getElementById('statusBadge').className = 'status-badge checked-in';
+            document.getElementById('checkBtn').textContent = 'Check Out';
+        }
+
+        // ==================== LOCATION & MAP ====================
+        function calculateDistance(lat1, lng1, lat2, lng2) {
+            const R = 6371e3;
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lng2 - lng1) * Math.PI / 180;
+            const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        async function sendLocationUpdate() {
+            if (!currentLocation || !currentEmployee) return;
+            
+            await apiCall('update_employee', {
+                id: currentEmployee.id,
+                lat: currentLocation.lat,
+                lng: currentLocation.lng,
+                last_update: new Date().toISOString()
+            });
+        }
+
+        function requestLocation() {
+            navigator.geolocation.watchPosition(
+                pos => {
+                    currentLocation = { 
+                        lat: pos.coords.latitude, 
+                        lng: pos.coords.longitude 
+                    };
+                    
+                    // Update UI
+                    document.getElementById('locationInfo').style.display = 'block';
+                    document.getElementById('currentCoords').textContent = 
+                        `${currentLocation.lat.toFixed(6)}, ${currentLocation.lng.toFixed(6)}`;
+                    
+                    // Check if in any zone
+                    const inZone = locations.some(loc => {
+                        const distance = calculateDistance(
+                            currentLocation.lat, currentLocation.lng,
+                            parseFloat(loc.lat), parseFloat(loc.lng)
+                        );
+                        return distance <= loc.radius;
+                    });
+                    
+                    document.getElementById('locationStatus').textContent = 
+                        inZone ? '✅ Inside check-in zone' : '⚠️ Outside check-in zones';
+                    document.getElementById('locationStatus').style.color = inZone ? '#28a745' : '#dc3545';
+                    
+                    // Initialize map with ALL locations
+                    if (!employeeMap) {
+                        console.log('🗺️ Initializing employee map...');
+                        
+                        employeeMap = L.map('employeeMap').setView([currentLocation.lat, currentLocation.lng], 15);
+                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(employeeMap);
+                        
+                        // Add ALL location zones
+                        console.log(`📍 Adding ${locations.length} check-in zones to map...`);
+                        locations.forEach((loc, index) => {
+                            try {
+                                L.marker([loc.lat, loc.lng])
+                                    .addTo(employeeMap)
+                                    .bindPopup(`<b>${loc.name}</b><br>Check-in Zone`);
+                                
+                                L.circle([loc.lat, loc.lng], {
+                                    color: '#28a745',
+                                    fillColor: '#28a745',
+                                    fillOpacity: 0.1,
+                                    radius: loc.radius
+                                }).addTo(employeeMap);
+                                
+                                console.log(`  ✅ Added zone ${index + 1}: ${loc.name}`);
+                            } catch (e) {
+                                console.error(`  ❌ Error adding zone ${index + 1}:`, e);
+                            }
+                        });
+                    }
+                    
+                    // Update employee marker
+                    if (employeeMarker) {
+                        employeeMarker.setLatLng([currentLocation.lat, currentLocation.lng]);
+                    } else {
+                        employeeMarker = L.marker([currentLocation.lat, currentLocation.lng], {
+                            icon: L.divIcon({
+                                className: 'you-marker',
+                                html: '<div style="background: #dc3545; color: white; padding: 5px 10px; border-radius: 20px; font-weight: bold; font-size: 12px;">You</div>',
+                                iconSize: [40, 30],
+                                iconAnchor: [20, 15]
+                            })
+                        }).addTo(employeeMap);
+                    }
+                    
+                    // Center map on employee
+                    employeeMap.setView([currentLocation.lat, currentLocation.lng]);
+                },
+                err => {
+                    alert('❌ Location access required. Please enable GPS.');
+                    document.getElementById('locationStatus').textContent = 'Location unavailable';
+                },
+                { enableHighAccuracy: true, timeout: 10000 }
+            );
+        }
+
+        // ==================== HISTORY ====================
+        function showView(view) {
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById(view + 'View').classList.add('active');
+            event.target.classList.add('active');
+            
+            if (view === 'history') loadHistory();
+        }
+
+        async function loadHistory() {
+            const result = await apiCall('get_logs');
+            if (result.success) {
+                const myLogs = result.data.filter(log => log.employee_id == currentEmployee.id).slice(0, 20);
+                const historyList = document.getElementById('historyList');
+                
+                if (myLogs.length === 0) {
+                    historyList.innerHTML = '<p style="color: #999;">No history yet</p>';
+                    return;
+                }
+                
+                historyList.innerHTML = myLogs.map(log => `
+                    <div style="padding: 10px; border-bottom: 1px solid #eee;">
+                        <strong>${new Date(log.timestamp).toLocaleString()}</strong><br>
+                        <span style="color: ${log.action === 'check-in' ? '#28a745' : '#dc3545'}; font-weight: bold;">
+                            ${log.action === 'check-in' ? '📍 Checked In' : '🏠 Checked Out'}
+                        </span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // ==================== LOGOUT ====================
+        function logout() {
+            if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+            location.reload();
+        }
+
+        function closeCameraModal() {
+            document.getElementById('cameraModal').classList.remove('active');
+            if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+        }
+    </script>
+</body>
+</html>
